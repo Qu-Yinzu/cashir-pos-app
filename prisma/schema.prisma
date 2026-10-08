@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- SAAS FOUNDATION ---
+
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  onboarding  String   @default("pending") // Sesuai TR-06 & Lampiran A.7
+  archived    Int      @default(0)         // Sesuai TR-12
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       TenantUser[]
+  categories  Category[]
+  products    Product[]
+  transactions Transaction[]
+  auditLogs   AuditLog[]
+  rawMaterials RawMaterial[]
+  stockMovements StockMovement[]
+  suppliers Supplier[]
+  orders Order[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenants   TenantUser[]
+}
+
+model TenantUser {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      String   // "OWNER" | "CASHIER" | "ADMIN"
+  createdAt DateTime @default(now())
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([tenantId, userId])
+}
+
+// --- MASTER DATA ---
+
+model Category {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  archived  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  products  Product[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  tenantId    String
+  sku         String?  
+  name        String
+  price       Decimal  @db.Decimal(10, 2)
+  stock       Int      @default(0) 
+  packagingCost Float    @default(0)
+  overheadCost  Float    @default(0)
+  status      String   @default("AKTIF") // AKTIF, MENIPIS, HABIS
+  imageUrl    String?  
+  archived    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  categories  Category[]
+  transactionItems TransactionItem[]
+  recipeIngredients RecipeIngredient[]
+  stockMovements StockMovement[]
+  orderItems OrderItem[]
+  overheads   ProductOverhead[]
+  @@unique([tenantId, sku])
+}
+
+// Tabel untuk mengelola stok bahan baku
+model RawMaterial {
+  id          String   @id @default(cuid())
+  tenantId    String
+  sku         String?
+  name        String
+  type        String   @default("RAW") // "RAW" (Bahan Mentah) atau "FINISHED" (Produk Jadi dr Supplier)
+  unit        String   // Satuan: gram, kg, ml, liter, pcs
+  stock       Float    @default(0) // Meng使用 Float karena bisa desimal (0.5 kg)
+  notes       String?
+  archived    Int      @default(0)
+  pricePerUnit  Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  recipes     RecipeIngredient[]
+  stockMovements StockMovement[]
+
+  @@unique([tenantId, sku])
+}
+
+// Tabel penghubung: 1 Produk butuh berapa banyak Bahan Baku
+model RecipeIngredient {
+  id            String   @id @default(cuid())
+  productId     String
+  rawMaterialId String
+  amount        Float    // Jumlah bahan yang dibutuhkan (contoh: 200 gram)
+
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  rawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, rawMaterialId])
+}
+
+model StockMovement {
+  id            String   @id @default(cuid())
+  tenantId      String
+  rawMaterialId String?  // Terisi jika stok masuk berupa bahan baku
+  productId     String?  // Terisi jika stok masuk berupa produk jadi
+  type          String   // "IN" (Masuk), "OUT" (Keluar), "ADJUST" (Koreksi)
+  amount        Float
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id])
+  rawMaterial   RawMaterial? @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+  product       Product?     @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// Tabel Kontak Supplier
+model Supplier {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  pic       String?  // Person In Charge (Nama Kontak)
+  phone     String?
+  address   String?
+  archived  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+}
+
+model ProductOverhead {
+  id        String   @id @default(cuid())
+  productId String
+  name      String   // Cth: "Bensin", "Kotak Karton", "Listrik"
+  price     Float
+  
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// --- TRANSACTIONS ---
+
+model Transaction {
+  id            String   @id @default(cuid())
+  tenantId      String
+  invoiceNumber String
+  total         Decimal  @db.Decimal(10, 2)
+  paidAmount    Decimal  @db.Decimal(10, 2)
+  change        Decimal  @db.Decimal(10, 2)
+  paymentMethod String   @default("CASH")
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  items         TransactionItem[]
+}
+
+model TransactionItem {
+  id            String   @id @default(cuid())
+  transactionId String
+  productId     String
+  productName   String   // Snapshot nama produk saat transaksi
+  price         Decimal  @db.Decimal(10, 2) // Snapshot harga saat transaksi
+  quantity      Int
+  subtotal      Decimal  @db.Decimal(10, 2)
+
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  product       Product     @relation(fields: [productId], references: [id])
+}
+
+// Tabel Transaksi Utama
+model Order {
+  id             String      @id @default(cuid())
+  tenantId       String
+  orderNumber    String
+  customerName   String?
+  customerType   String      @default("Umum")
+  orderType      String      @default("Dine-in")
+  paymentMethod  String      @default("CASH")
+  subtotal       Float
+  tax            Float
+  discount       Float
+  total          Float
+  isPaid         Boolean     @default(true)
+  status         String      @default("ACTIVE") // ACTIVE (Dapur), COMPLETED (Selesai/Riwayat)
+  createdAt      DateTime    @default(now())
+  completedAt    DateTime?
+
+  tenant         Tenant      @relation(fields: [tenantId], references: [id])
+  orderItems     OrderItem[]
+}
+
+// Tabel Detail Item yang Dipesan
+model OrderItem {
+  id             String   @id @default(cuid())
+  orderId        String
+  productId      String
+  productName    String   // Disimpan sebagai snapshot nama saat dipesan
+  price          Float
+  qty            Int
+  note           String?
+
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product  @relation(fields: [productId], references: [id])
+}
+
+// --- AUDIT & SECURITY ---
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String
+  action      String
+  module      String
+  entityId    String
+  changes     String   @db.Text // JSON string of before/after
+  createdAt   DateTime @default(now())
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+}
+
