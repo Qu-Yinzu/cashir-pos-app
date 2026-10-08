@@ -1,1 +1,0 @@
-# cashir-pos-app
